@@ -1,0 +1,394 @@
+---
+title: "Mpox transmission Dynamic in Burundi - Analysis Plan and code"
+date: "2025-07-30"
+author: 
+ - name: "Raoul Kamadjeu"
+   affiliation: "Department of Epidemiology and Biostatistics - School of Public Health and Health Policy. City University of New York"
+   email: raoul.kamadjeu22@sphmail.cuny.edu
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This file explains the analysis plan and the code used in the Manuscript *Characterizing household transmission dynamics of Clade Ib Mpox in Burundi: findings from a prospective cohort study (January – March 2025) by Kamadjeu et al.* - published in the Lancet Infectious Diseases (doi:)
+
+**Environment: **
+
+All analysis were done using `R-studio`
+
+
+`. RStudio 2025.05.0+496 "Mariposa Orchid" Release (f0b76cc00df96fe7f0ee687d4bed0423bc3de1f8, 2025-05-04) for windows
+Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) RStudio/2025.05.0+496 Chrome/132.0.6834.210 Electron/34.5.1 Safari/537.36, Quarto 1.6.42`
+
+
+**Required packages**
+
+`Tidyverse`
+
+`table1`
+
+`igraph`
+
+
+## Introduction
+
+This study aims to provide empirical estimates of key epidemiological parameters, such as the basic reproduction number ($R_0$), transmission probabilities (secondary attack rate (SAR)), using household-level data collected prospectively in the framework of mpox surveillance, in Burundi, between Jan - March 2025
+
+## Main analysis
+
+The primary objectives of this analysis are:
+
+- To estimate the overall transmission probability ($P_{trans}$) and basic reproduction number ($R_0$) of Clade Ib mpox within households.
+
+- Assess association between socio-demographic and clinical characteristics of primary cases and secondary infection
+Assess association between household characteristics and secondary infection
+
+- To assess age-stratified transmission dynamics by comparing p trans and R between individuals under 15 years of age and those aged 15 years and older.
+
+- To conduct a sensitivity analysis to evaluate the impact of potential mis-classification bias (e.g., undetected adult primary cases) on estimated transmission parameters.
+
+## Data overview
+
+- **Primary cases** (N = 88): Confirmed mpox cases, enrolled from 3 treatment centers.
+- **Households**: With ≥1 confirmed case and ≥1 child under 15.
+- **Household contacts** (N = 426): Individuals living with primary cases during infectious period.
+- **Follow-up**: Weekly visits for 21 days to detect secondary cases.
+
+
+## Data sources
+
+Key variables include:
+
+- Index (primary) case sociodemographic and clinical characteristics
+
+- Household identifiers
+
+- Number of initially susceptible individuals per household
+
+- Number of secondary cases per household
+
+- Age and sex of all enrolled individuals (primary cases, secondary cases, and household contacts)
+
+- Household-level characteristics (e.g., household size, crowding, water source, type of dwelling, distance from nearest health facilities, urban/rural location, socio-economic proxies like fridge/TV/cooking fuel availability).
+
+
+
+## Statistical methods
+
+### Descriptive statistics
+
+Simple frequencies and proportions were used to compare proportions between groups. 
+
+`table1` was used to output most descriptive statistics. 
+
+The following function from was used to output the interquartile range of medians. 
+
+```{r, eval=FALSE}
+
+
+#IQR function
+render.median.IQR <- function(x, ...) {
+  c('', 
+    `Mean (SD)` = sprintf("%s (%s)", round(mean(x), 2), round(sd(x), 2)),
+    `Median [IQR]` = sprintf("%s [%s, %s]", round(median(x),2), 
+                             round(quantile(x, 0.25),2), round(quantile(x, 0.75),2)))
+}
+
+#example of use of function to display median and IQR
+table1::table1(~age_yrs|sex, data = case_data, render = render.median.IQR)
+
+```
+
+
+### Analytical statistics
+
+#### Association between secondary transmission and household characteristics.
+
+Univariate logistic regression modeling of secondary transmission in household with household characteristics. The univariate model was in the form: 
+
+$Trans_{(0/1)} = \alpha HH_c \times \beta$ 
+
+with 
+
+$Trans_{(0/1)}$ as the household transmission status 0=No secondary transmission, 1=Secondary transmission, irrespective of the number of secondary cases
+
+and 
+
+$HH_c$ the household characteristic.
+
+A sample code is provided here
+
+```{r, eval=FALSE}
+
+# Run logistic regression
+
+#secondary_transmission = binary data, 1=secondary transmission in the HH, 0=no secondary transmission in the HH
+
+model <- glm(secondary_transmission ~ as.factor(quartiles.crowding),
+             data = household.data,
+             family = binomial)
+
+# Summary of the model
+summary(model)
+
+# Optional: Get odds ratios and 95% confidence intervals
+exp(cbind(OR = coef(model), confint(model)))
+
+
+```
+
+
+At the request of a reviewer, a Poisson model was also performed, with the outcome as the number of secondary cases in the household (0,1,2,3 etc..). The code is provided below.
+
+
+```{r, eval=FALSE}
+
+model.poisson <- glm(nb.sec_cases_inhh ~ as.factor(quartiles.crowding),
+             data = household.data.with.secondary.cases,
+             family = poisson(link = "log"))
+summary(model.poisson)
+
+#Checking for dispersion
+# Residual deviance divided by degrees of freedom
+dispersion <- sum(residuals(model.poisson, type = "pearson")^2) / df.residual(model.poisson)
+dispersion
+
+#extracting the odd rations: 
+exp(coef(model.poisson))
+
+
+```
+
+
+None of the HH characteristics was associated with secondary transmission. No multivariate logistic regression conducted.
+
+
+#### Household transmission quantities
+
+**Core transmission model: chain-binomial model**
+
+We used the chain-binomial model to estimate the transmission probability $(p_{trans})$ within households. The model assumes that each susceptible individual has an independent probability of infection from each infectious individual. The model accounts for the final size of household outbreaks.
+
+**Parameter estimation and uncertainty**
+
+We used the Maximum Likelihood Estimation (MLE): The `optim` function in R was used to estimate the transmission probability ($P_{trans}$) by maximizing the likelihood function.
+
+Non-parametric Bootstrapping approach (with 2000 replicates) was employed to derive:
+
+- 95% confidence intervals for $P_{trans}$ and $R_0$
+
+ - The Empirical distributions of $P_{trans}$ and $R_0$ used to compared age stratas ($\lt15$ and $\ge 15$ years)
+
+
+##### **1. Descriptive Statistics**
+
+- Summarize demographic characteristics (age, sex) of primary cases, secondary cases, and all household contacts.
+
+- Present household characteristics (size, crowding, SES proxies).
+
+
+##### **2. Secondary attack rates (SARs)**
+
+- **Definition**: Number of secondary cases / number of susceptible household contacts, in each household (household specific) and across household (overall)
+
+- **Age stratification**: $\lt15$ vs. $\ge15$ years (Overall SAR)
+
+**Estimation of SAR**
+
+The overall secondary attack rate is calculate using the formula:
+
+$SAR = \frac{\sum{SecCase}}{\sum{SusCon}}$
+
+Where 
+
+ - $\sum{SecCase}$ represent the sum of all secondary cases across all household, and 
+ 
+ - $\sum{SusCon}$ the sum of all susceptible contacts across all households.
+
+For each household, the $SAR$ for household $i$ was estimated as: 
+
+$SAR_i = \frac{\sum{SecCase_i}}{\sum{SusCon_i}}$
+
+Where 
+
+ - $\sum{SecCase_i}$ represent the sum of all secondary cases in household $i$
+ 
+ - $\sum{SusCon_i}$ represent the sum of all susceptible contacts in household $i$
+ 
+ 
+ The same process was used to estimate SARs for the age strata (age of primary cases $\lt15$ and $\ge 15$)
+
+
+##### 2. **Basic Reproduction Number (R0)**
+
+
+The following code (MLE) was used to estimate $P_{trans}$ and derived $R_0$ and the 95% CI using boostrap
+
+```{r, eval=FALSE}
+
+# Negative log-likelihood function for binomial transmission
+compute_R0 <- function(data) {
+  neg_log_likelihood <- function(p, data) {
+    ll <- dbinom(data$secondary_cases, size = data$susceptibles, prob = p, log = TRUE)
+    return(-sum(ll))
+  }
+  optim_result <- optim(par = 0.1, fn = neg_log_likelihood, data = data,
+                        method = "Brent", lower = 0, upper = 1)
+  p_hat <- optim_result$par
+  mean_contacts <- mean(data$susceptibles)
+  return(p_hat * mean_contacts)
+}
+
+# Bootstrap function
+bootstrap_R0 <- function(data, n_boot = 2000) {
+  R0_vals <- numeric(n_boot)
+  for (i in 1:n_boot) {
+    sample_data <- data[sample(nrow(data), replace = TRUE), ]
+    R0_vals[i] <- compute_R0(sample_data)
+  }
+  return(R0_vals)
+}
+
+# Run the bootstrap
+R0_bootstrap <- bootstrap_R0(household_data_transmission_new, n_boot = 2000)
+
+# Calculate 95% confidence interval
+CI_lower <- quantile(R0_bootstrap, 0.025)
+CI_upper <- quantile(R0_bootstrap, 0.975)
+R0_point <- compute_R0(household_data_transmission_new)
+
+# Output results
+cat("Estimated R₀:", round(R0_point, 3), "\n")
+cat("95% CI for R₀: [", round(CI_lower, 3), ",", round(CI_upper, 3), "]\n")
+
+```
+
+The same process was used to estimate $R_0$ for the age strata (age of primary cases $\lt15$ and $\ge 15$)
+
+##### 3. **Sensitivity analysis**
+
+- Reclassification scenario: *all primary cases under 15 years of age were reclassified as secondary cases and a theoretical adult index case was assumed*
+
+- Created a new data where, if primary case $\lt15$, reclassify as secondary case (increment the household secondary case by 1) and created an hypothetical primary case aged $\ge15$.
+
+- Re-estimate overall $P_{trans}$ and $R_0$ (and their 95% CIs) using bootstrapping on the modified dataset.
+
+- Compare these sensitivity analysis results to the primary analysis findings.
+
+##### 4. **Comparing estimates**
+
+- The  ($\text{Mann-Whitney U test (Wilcoxon Rank-Sum test)}$) was used to compare the bootstrap distributions of transmission probabilities and $R_0$ between different age strata.
+
+- Simple $\text{prop.test()}$ function (or $\text{Chi-squared test}$) was used to compare proportions.
+
+- Comparison of Medians/Means: For continuous variables like age, median comparison we used the $\text{Mann-Whitney U test}$, and for mean comparison we use the independent samples $\text{t-test}$ (after checking assumptions like normality and homogeneity of variance).
+
+Example: Graphing $R_0$ distribution of the two strata of primary case age strata
+
+```{r, eval=FALSE}
+
+#under_15_boot - over_15_boot
+set.seed(123)
+
+
+# Combine the two vector obtained from boostrapping R0 for <15 and over15, into a data frame
+ro.by.age.strata.df <- data.frame(
+  R0 = c(under_15_boot, over_15_boot),
+  Group = rep(c("<15 years", "≥15 years"), each = 2000)
+)
+
+#Estimate the median of the two distribution
+medians <- ro.by.age.strata.df %>%
+  group_by(Group) %>%
+  summarize(median_R0 = median(R0))
+
+# Plot
+ro.by.age.strata.plot<-ggplot(ro.by.age.strata.df, aes(x = R0, fill = Group)) +
+  geom_density(aes(y = after_stat(density)), alpha = 0.5, adjust=3) +
+    geom_vline(data = medians, aes(xintercept = median_R0, color = Group),
+             linetype = "dashed", linewidth = 1) +
+  theme_minimal() +
+  labs(
+    title = "Distribution of Estimated "~R[0]~" by Age Group",
+    x = expression("Basic Reproduction Number ("~R[0]~")"),
+    y = "Density",
+    fill = "Age Group"
+  ) +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"))+
+    scale_color_manual(values = c("<15 years" = "#1f77b4", "≥15 years" = "#ff7f0e")) 
+
+ro.by.age.strata.plot
+
+```
+
+Comparing the two medians
+
+```{r, eval=FALSE}
+
+wilcox_test_result <- wilcox.test(under_15_boot, over_15_boot)
+wilcox_test_result
+
+```
+
+
+##### 5. **Transmission tree**
+
+We graph the transmission with data arrange into infector (n) and infected (n)
+
+```{r, eval=FALSE}
+
+library(igraph)
+library(dplyr)
+set.seed(1235)
+# Load data (provided in the data folder)
+data <- read.csv("infect_infected_tree_csv.csv")  
+
+# Prepare node data
+nodes <- bind_rows(
+  data %>% select(id = infector_id, sex = sex_infector, age = age_infector),
+  data %>% select(id = infected_id, sex = sex_infected, age = age_infected)
+) %>% distinct(id, .keep_all = TRUE)
+
+# Create graph
+g <- graph_from_data_frame(data %>% select(infector_id, infected_id), 
+                          directed = TRUE,
+                          vertices = nodes)
+
+# Assign colors
+V(g)$color <- ifelse(V(g)$sex == "Male", "skyblue", "lightpink")
+
+# export as svg
+svg("transmission_tree_all_2_svg.svg")  # High-res output
+
+# Use force-directed layout with more space
+lay <- layout_with_fr(g, niter = 3000, grid = "nogrid")  # More iterations = better spacing
+
+# Plot with expanded canvas
+par(mar = c(0, 0, 2, 0))  # Remove margins
+plot(g,
+     layout = lay,
+     vertex.size = 55,
+     vertex.label = V(g)$age,
+     vertex.label.color = "black", 
+     vertex.label.cex = 1,
+     vertex.frame.color = NA,
+     edge.arrow.size = 0.5,
+     edge.color = adjustcolor("black", alpha.f = 1),
+     edge.curved = 0.2,  # Gentle curves to distinguish arrows
+     rescale = FALSE,    # Prevent auto-scaling to [0,1]
+     xlim = range(lay[,1]) * 1.2,  # Expand x-axis
+     ylim = range(lay[,2]) * 1.2,  # Expand y-axis
+     asp = 0
+)
+
+dev.off()  # Save the plot
+
+```
+
+## References
+
+1. Analysis of Infectious Disease Data. N.G. Becker (1989) [https://doi.org/10.1201/9781315137407]
+
+
